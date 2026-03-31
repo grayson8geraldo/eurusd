@@ -1,168 +1,151 @@
 """
 Получение live-данных EUR/USD H1.
-Использует Yahoo Finance API напрямую через HTTP (без yfinance).
-Включает retry-логику и несколько fallback endpoints.
+Использует Twelve Data API (бесплатно, 800 запросов/день).
+Регистрация: https://twelvedata.com/register
 """
 
+import os
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 import pandas as pd
 import requests
 
-from config import EMA_PERIOD, RSI_PERIOD
+from config import TWELVEDATA_API_KEY, SYMBOL, EMA_PERIOD, RSI_PERIOD
 from indicators import calc_ema, calc_rsi
 
 
-# Несколько серверов Yahoo Finance (если один лимитирует — пробуем другой)
-YF_HOSTS = [
-    "https://query1.finance.yahoo.com",
-    "https://query2.finance.yahoo.com",
-]
+TD_BASE = "https://api.twelvedata.com"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "application/json",
-}
-
-# Сессия с keep-alive для переиспользования соединения
 _session = requests.Session()
-_session.headers.update(HEADERS)
 
 
-def _request_with_retry(path: str, params: dict,
-                        max_retries: int = 3, base_delay: float = 5.0) -> dict:
-    """
-    HTTP GET с retry и exponential backoff по нескольким хостам Yahoo Finance.
-    """
+def _get_api_key() -> str:
+    """Получает API ключ из config или переменной окружения."""
+    key = TWELVEDATA_API_KEY or os.environ.get("TWELVEDATA_API_KEY", "")
+    if not key:
+        raise RuntimeError(
+            "\n╔══════════════════════════════════════════════════════════╗\n"
+            "║  API ключ не найден!                                    ║\n"
+            "║                                                         ║\n"
+            "║  1. Зайдите на https://twelvedata.com/register          ║\n"
+            "║  2. Скопируйте API ключ из Dashboard                    ║\n"
+            "║  3. Вставьте в config.py → TWELVEDATA_API_KEY           ║\n"
+            "║     или задайте переменную окружения:                    ║\n"
+            "║     export TWELVEDATA_API_KEY=ваш_ключ                  ║\n"
+            "╚══════════════════════════════════════════════════════════╝"
+        )
+    return key
+
+
+def _td_request(endpoint: str, params: dict, max_retries: int = 3) -> dict:
+    """HTTP GET к Twelve Data API с retry."""
+    params["apikey"] = _get_api_key()
     last_error = None
 
     for attempt in range(max_retries):
-        host = YF_HOSTS[attempt % len(YF_HOSTS)]
-        url = f"{host}{path}"
-
         try:
-            resp = _session.get(url, params=params, timeout=15)
-
-            if resp.status_code == 200:
-                return resp.json()
-
-            if resp.status_code == 429:
-                # Rate limited — ждём дольше
-                delay = base_delay * (2 ** attempt)
-                print(f"  ⏳ Rate limit (429), жду {delay:.0f}с...")
-                time.sleep(delay)
-                last_error = f"429 Too Many Requests (попытка {attempt + 1})"
-                continue
-
+            resp = _session.get(f"{TD_BASE}/{endpoint}", params=params, timeout=15)
             resp.raise_for_status()
+            data = resp.json()
 
-        except requests.exceptions.ConnectionError as e:
-            delay = base_delay * (2 ** attempt)
-            print(f"  ⏳ Ошибка соединения, жду {delay:.0f}с...")
+            # Twelve Data возвращает ошибки в JSON
+            if data.get("status") == "error":
+                msg = data.get("message", "Unknown error")
+                if "API key" in msg:
+                    raise RuntimeError(f"Неверный API ключ: {msg}")
+                if "limit" in msg.lower():
+                    delay = 10 * (2 ** attempt)
+                    print(f"  ⏳ API лимит, жду {delay}с...")
+                    time.sleep(delay)
+                    last_error = msg
+                    continue
+                raise RuntimeError(f"Twelve Data API: {msg}")
+
+            return data
+
+        except requests.exceptions.RequestException as e:
+            delay = 5 * (2 ** attempt)
+            print(f"  ⏳ Ошибка сети, жду {delay}с...")
             time.sleep(delay)
             last_error = str(e)
-        except requests.exceptions.Timeout:
-            delay = base_delay * (2 ** attempt)
-            print(f"  ⏳ Таймаут, жду {delay:.0f}с...")
-            time.sleep(delay)
-            last_error = "Timeout"
-        except Exception as e:
-            last_error = str(e)
-            break
 
     raise RuntimeError(f"Не удалось получить данные после {max_retries} попыток: {last_error}")
-
-
-def _fetch_yahoo_chart(symbol: str = "EURUSD=X", days_back: int = 30,
-                       interval: str = "1h") -> pd.DataFrame:
-    """
-    Загружает свечи через Yahoo Finance Chart API.
-    """
-    period1 = int((datetime.now(timezone.utc) - timedelta(days=days_back)).timestamp())
-    period2 = int(datetime.now(timezone.utc).timestamp())
-
-    params = {
-        "period1": period1,
-        "period2": period2,
-        "interval": interval,
-        "includePrePost": "false",
-    }
-
-    data = _request_with_retry(f"/v8/finance/chart/{symbol}", params)
-
-    result = data.get("chart", {}).get("result", [])
-    if not result:
-        raise RuntimeError(f"Нет данных от Yahoo Finance для {symbol}")
-
-    chart = result[0]
-    timestamps = chart.get("timestamp", [])
-    if not timestamps:
-        raise RuntimeError("Пустой список timestamp в ответе Yahoo")
-
-    quotes = chart["indicators"]["quote"][0]
-
-    df = pd.DataFrame({
-        "datetime": pd.to_datetime(timestamps, unit="s", utc=True),
-        "open": quotes["open"],
-        "high": quotes["high"],
-        "low": quotes["low"],
-        "close": quotes["close"],
-        "volume": quotes.get("volume", [0] * len(timestamps)),
-    })
-
-    df = df.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
-    return df
 
 
 def fetch_h1_candles(days_back: int = 30) -> pd.DataFrame:
     """
     Загружает последние H1-свечи EUR/USD с индикаторами.
+    Twelve Data бесплатно даёт до 5000 строк.
     """
-    data = _fetch_yahoo_chart("EURUSD=X", days_back=days_back, interval="1h")
+    output_size = min(days_back * 24, 5000)
 
-    if data.empty:
-        raise RuntimeError("Получен пустой набор данных")
+    data = _td_request("time_series", {
+        "symbol": SYMBOL,
+        "interval": "1h",
+        "outputsize": output_size,
+        "timezone": "UTC",
+        "format": "JSON",
+    })
 
-    data["date"] = data["datetime"].dt.date
-    data["hour"] = data["datetime"].dt.hour
-    data["weekday"] = data["datetime"].dt.weekday
+    values = data.get("values", [])
+    if not values:
+        raise RuntimeError("Нет данных от Twelve Data API")
 
-    data["ema21"] = calc_ema(data["close"], EMA_PERIOD)
-    data["rsi"] = calc_rsi(data["close"], RSI_PERIOD)
-    data["body"] = abs(data["close"] - data["open"])
-    data["is_bullish"] = data["close"] > data["open"]
-    data["volume"] = data["volume"].fillna(0)
+    df = pd.DataFrame(values)
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
+    df["open"] = df["open"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    df["close"] = df["close"].astype(float)
 
-    data = data[["datetime", "date", "hour", "weekday",
-                  "open", "high", "low", "close", "volume",
-                  "ema21", "rsi", "body", "is_bullish"]].copy()
+    # Volume может отсутствовать для forex
+    if "volume" in df.columns:
+        df["volume"] = pd.to_numeric(df["volume"], errors="coerce").fillna(0)
+    else:
+        df["volume"] = 0.0
 
-    return data.sort_values("datetime").reset_index(drop=True)
+    df = df.sort_values("datetime").reset_index(drop=True)
+
+    df["date"] = df["datetime"].dt.date
+    df["hour"] = df["datetime"].dt.hour
+    df["weekday"] = df["datetime"].dt.weekday
+
+    df["ema21"] = calc_ema(df["close"], EMA_PERIOD)
+    df["rsi"] = calc_rsi(df["close"], RSI_PERIOD)
+    df["body"] = abs(df["close"] - df["open"])
+    df["is_bullish"] = df["close"] > df["open"]
+
+    df = df[["datetime", "date", "hour", "weekday",
+              "open", "high", "low", "close", "volume",
+              "ema21", "rsi", "body", "is_bullish"]].copy()
+
+    return df
 
 
 def get_current_price() -> float:
     """Получает текущую цену EUR/USD."""
     try:
-        data = _request_with_retry(
-            "/v8/finance/chart/EURUSD=X",
-            params={"interval": "1m", "range": "1d"},
-            max_retries=2,
-            base_delay=3.0,
-        )
-        result = data.get("chart", {}).get("result", [])
-        if result:
-            meta = result[0].get("meta", {})
-            price = meta.get("regularMarketPrice", 0)
-            if price > 0:
-                return price
-            # Fallback: последний close
-            closes = result[0]["indicators"]["quote"][0].get("close", [])
-            for c in reversed(closes):
-                if c is not None:
-                    return c
+        data = _td_request("price", {
+            "symbol": SYMBOL,
+        }, max_retries=2)
+        price = float(data.get("price", 0))
+        if price > 0:
+            return price
+    except Exception:
+        pass
+
+    # Фоллбэк: последняя свеча
+    try:
+        data = _td_request("time_series", {
+            "symbol": SYMBOL,
+            "interval": "1min",
+            "outputsize": 1,
+            "timezone": "UTC",
+        }, max_retries=2)
+        values = data.get("values", [])
+        if values:
+            return float(values[0]["close"])
     except Exception:
         pass
 

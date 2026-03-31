@@ -3,8 +3,12 @@
 Все параметры стратегии собраны в одном месте.
 """
 
-# === Символ ===
-SYMBOL = "EURUSD=X"            # Yahoo Finance тикер для EUR/USD
+# === API ===
+# Получите бесплатный ключ на https://twelvedata.com/register
+# Затем вставьте сюда или передайте через переменную окружения TWELVEDATA_API_KEY
+TWELVEDATA_API_KEY = ""  # <-- Вставьте свой ключ сюда
+
+SYMBOL = "EUR/USD"
 
 # === Временные окна (UTC часы) ===
 ASIAN_SESSION_START = 0        # 00:00 UTC
@@ -67,4 +71,4 @@ STATE_FILE = "bot_state.json"
 JOURNAL_FILE = "trade_journal.csv"
 
 # === Интервал проверки (секунды) ===
-CHECK_INTERVAL_SECONDS = 30    # Проверяем рынок каждые 30 сек
+CHECK_INTERVAL_SECONDS = 30
