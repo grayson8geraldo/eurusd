@@ -115,6 +115,7 @@ def run_bot():
     last_processed_hour = None
     data = None
     last_data_fetch = None
+    last_price_check = None
 
     print("\n  Бот запущен. Ctrl+C для остановки.\n")
 
@@ -128,9 +129,9 @@ def run_bot():
             # Сброс дневных счётчиков
             trader.reset_daily(today_str)
 
-            # Обновляем данные каждые 5 минут или при первом запуске
+            # Обновляем данные каждые 10 минут или при первом запуске
             if data is None or last_data_fetch is None or \
-               (now - last_data_fetch).total_seconds() > 300:
+               (now - last_data_fetch).total_seconds() > 600:
                 try:
                     print(f"  [{now.strftime('%H:%M:%S')} UTC] Загрузка данных...")
                     data = fetch_h1_candles(days_back=30)
@@ -139,24 +140,30 @@ def run_bot():
                           f"Последняя: {data['datetime'].iloc[-1]}")
                 except Exception as e:
                     print(f"  ❌ Ошибка загрузки данных: {e}")
-                    time.sleep(60)
+                    time.sleep(120)
                     continue
 
-            # === Проверяем открытую позицию на каждом тике ===
+            # === Проверяем открытую позицию каждые 2 минуты ===
             if trader.open_trade is not None:
-                try:
-                    price = get_current_price()
-                    if price > 0:
-                        result = trader.check_and_close(
-                            current_price=price,
-                            high=price,  # Для live используем текущую цену как high/low
-                            low=price,
-                            current_time=now,
-                        )
-                        if result:
-                            _print_trade_closed(result, trader)
-                except Exception as e:
-                    print(f"  ⚠ Ошибка проверки позиции: {e}")
+                should_check_price = (
+                    last_price_check is None or
+                    (now - last_price_check).total_seconds() > 120
+                )
+                if should_check_price:
+                    try:
+                        price = get_current_price()
+                        last_price_check = now
+                        if price > 0:
+                            result = trader.check_and_close(
+                                current_price=price,
+                                high=price,
+                                low=price,
+                                current_time=now,
+                            )
+                            if result:
+                                _print_trade_closed(result, trader)
+                    except Exception as e:
+                        print(f"  ⚠ Ошибка проверки позиции: {e}")
 
             # === Проверяем сигналы только на закрытии новой H1 свечи ===
             # Обрабатываем свечу один раз — в первые 5 минут после закрытия
