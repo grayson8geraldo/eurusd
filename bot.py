@@ -14,7 +14,7 @@ EUR/USD H1 Live Trading Bot (Paper Trading).
 
 import argparse
 import time
-import signal
+import signal as signal_module
 import sys
 import os
 from datetime import datetime, timezone, date
@@ -104,8 +104,8 @@ def run_bot():
     """Основной цикл бота."""
     global running
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    signal_module.signal(signal_module.SIGINT, signal_handler)
+    signal_module.signal(signal_module.SIGTERM, signal_handler)
 
     print_banner()
 
