@@ -2,10 +2,11 @@
 Торговые модули стратегии:
   - London Breakout (LB)
   - Overlap Momentum (OM)
+
+Работает как с бэктест-данными, так и с live-данными.
 """
 
 import pandas as pd
-import numpy as np
 
 from config import (
     LONDON_BREAKOUT_START,
@@ -28,14 +29,13 @@ from config import (
 )
 
 
-def check_london_breakout(candle: pd.Series, asian: dict, data: pd.DataFrame, idx: int) -> dict | None:
+def check_london_breakout(candle: pd.Series, asian: dict,
+                           data: pd.DataFrame, idx: int) -> dict | None:
     """
-    Проверяет, есть ли сигнал London Breakout на данной свече.
-
+    Проверяет сигнал London Breakout на данной свече.
     Возвращает dict с параметрами сделки или None.
     """
     hour = candle["hour"]
-    # Свечи, закрывающиеся в 09:00-12:00 (т.е. hour = 8,9,10,11)
     if hour < LONDON_BREAKOUT_START or hour > LONDON_BREAKOUT_END:
         return None
 
@@ -45,7 +45,7 @@ def check_london_breakout(candle: pd.Series, asian: dict, data: pd.DataFrame, id
     range_pips = asian["range_pips"]
     ema = candle["ema21"]
 
-    # Определяем направление пробоя
+    # Направление пробоя
     direction = None
     if close > asian_high:
         direction = "BUY"
@@ -66,7 +66,7 @@ def check_london_breakout(candle: pd.Series, asian: dict, data: pd.DataFrame, id
     if direction == "SELL" and close >= ema:
         return None
 
-    # Расчёт SL и TP
+    # SL и TP
     range_price = range_pips * PIP_SIZE
     sl_distance = range_price + LB_SL_EXTRA_PIPS * PIP_SIZE
     tp_distance = range_price * LB_TP_MULTIPLIER
@@ -96,45 +96,41 @@ def check_london_breakout(candle: pd.Series, asian: dict, data: pd.DataFrame, id
     }
 
 
-def check_overlap_momentum(candle: pd.Series, data: pd.DataFrame, idx: int) -> dict | None:
+def check_overlap_momentum(candle: pd.Series,
+                            data: pd.DataFrame, idx: int) -> dict | None:
     """
-    Проверяет, есть ли сигнал Overlap Momentum на данной свече.
-
+    Проверяет сигнал Overlap Momentum на данной свече.
     Возвращает dict с параметрами сделки или None.
     """
     hour = candle["hour"]
-    # Свечи, закрывающиеся в 14:00-16:00 (т.е. hour = 13,14,15)
     if hour < OVERLAP_START or hour > OVERLAP_END:
         return None
 
-    # Нужно достаточно истории
     if idx < max(OM_BODY_LOOKBACK, OM_VOLUME_LOOKBACK):
         return None
 
     close = candle["close"]
     body = candle["body"]
 
-    # Фильтр: крупная свеча (тело в 1.2+ раз больше средних)
+    # Крупная свеча
     prev_bodies = data.iloc[idx - OM_BODY_LOOKBACK:idx]["body"]
     avg_body = prev_bodies.mean()
     if avg_body == 0 or body < avg_body * OM_BODY_RATIO:
         return None
 
-    # Фильтр: повышенный объём (в 1.5+ раз)
+    # Повышенный объём
     prev_volumes = data.iloc[idx - OM_VOLUME_LOOKBACK:idx]["volume"]
     avg_volume = prev_volumes.mean()
     if avg_volume == 0 or candle["volume"] < avg_volume * OM_VOLUME_RATIO:
         return None
 
-    # Фильтр: RSI между 35 и 70
+    # RSI
     rsi = candle["rsi"]
     if pd.isna(rsi) or rsi < RSI_OVERLAP_MIN or rsi > RSI_OVERLAP_MAX:
         return None
 
-    # Направление по цвету свечи
     direction = "BUY" if candle["is_bullish"] else "SELL"
 
-    # SL и TP фиксированные
     sl_distance = OM_SL_PIPS * PIP_SIZE
     tp_distance = OM_TP_PIPS * PIP_SIZE
 

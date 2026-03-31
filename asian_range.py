@@ -1,9 +1,10 @@
 """
-Расчёт Asian Range для каждого торгового дня.
-Asian Session: 00:00 — 07:00 UTC (свечи с hour 0..6, т.к. свеча 06:00 закрывается в 07:00).
+Расчёт Asian Range для текущего дня.
+Asian Session: 00:00 — 07:00 UTC.
 """
 
 import pandas as pd
+from datetime import date
 
 from config import (
     ASIAN_SESSION_START,
@@ -14,36 +15,29 @@ from config import (
 )
 
 
-def compute_asian_ranges(data: pd.DataFrame) -> dict:
+def compute_asian_range_for_date(data: pd.DataFrame, target_date: date) -> dict | None:
     """
-    Для каждой даты вычисляет Asian Range.
+    Вычисляет Asian Range для конкретной даты.
 
-    Возвращает dict: date -> {
-        'asian_high': float,
-        'asian_low': float,
-        'range_pips': float,
-        'valid': bool  (True если range в 15-60 пипсов)
-    }
+    Возвращает dict или None если недостаточно данных.
     """
     asian_candles = data[
-        (data["hour"] >= ASIAN_SESSION_START) & (data["hour"] < ASIAN_SESSION_END)
+        (data["date"] == target_date) &
+        (data["hour"] >= ASIAN_SESSION_START) &
+        (data["hour"] < ASIAN_SESSION_END)
     ]
 
-    result = {}
-    for date, group in asian_candles.groupby("date"):
-        if len(group) < 3:
-            continue
+    if len(asian_candles) < 3:
+        return None
 
-        asian_high = group["high"].max()
-        asian_low = group["low"].min()
-        range_pips = round((asian_high - asian_low) / PIP_SIZE, 1)
-        valid = ASIAN_RANGE_MIN_PIPS <= range_pips <= ASIAN_RANGE_MAX_PIPS
+    asian_high = asian_candles["high"].max()
+    asian_low = asian_candles["low"].min()
+    range_pips = round((asian_high - asian_low) / PIP_SIZE, 1)
+    valid = ASIAN_RANGE_MIN_PIPS <= range_pips <= ASIAN_RANGE_MAX_PIPS
 
-        result[date] = {
-            "asian_high": asian_high,
-            "asian_low": asian_low,
-            "range_pips": range_pips,
-            "valid": valid,
-        }
-
-    return result
+    return {
+        "asian_high": asian_high,
+        "asian_low": asian_low,
+        "range_pips": range_pips,
+        "valid": valid,
+    }
