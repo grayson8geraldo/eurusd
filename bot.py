@@ -146,27 +146,41 @@ def run_bot():
                     time.sleep(120)
                     continue
 
-            # === Проверяем открытую позицию каждые 2 минуты ===
+            # === Проверяем открытую позицию ===
+            # 1) На границе H1 свечи — используем real high/low из данных
+            # 2) Между свечами — используем текущую цену (каждые 2 мин)
             if trader.open_trade is not None:
-                should_check_price = (
-                    last_price_check is None or
-                    (now - last_price_check).total_seconds() > 120
-                )
-                if should_check_price:
-                    try:
-                        price = get_current_price()
-                        last_price_check = now
-                        if price > 0:
-                            result = trader.check_and_close(
-                                current_price=price,
-                                high=price,
-                                low=price,
-                                current_time=now,
-                            )
-                            if result:
-                                _print_trade_closed(result, trader)
-                    except Exception as e:
-                        print(f"  ⚠ Ошибка проверки позиции: {e}")
+                if candle_boundary and data is not None and len(data) > 0:
+                    # Свеча только закрылась — проверяем по её high/low
+                    last_c = data.iloc[-1]
+                    result = trader.check_and_close(
+                        current_price=float(last_c["close"]),
+                        high=float(last_c["high"]),
+                        low=float(last_c["low"]),
+                        current_time=now,
+                    )
+                    if result:
+                        _print_trade_closed(result, trader)
+                else:
+                    should_check_price = (
+                        last_price_check is None or
+                        (now - last_price_check).total_seconds() > 120
+                    )
+                    if should_check_price:
+                        try:
+                            price = get_current_price()
+                            last_price_check = now
+                            if price > 0:
+                                result = trader.check_and_close(
+                                    current_price=price,
+                                    high=price,
+                                    low=price,
+                                    current_time=now,
+                                )
+                                if result:
+                                    _print_trade_closed(result, trader)
+                        except Exception as e:
+                            print(f"  ⚠ Ошибка проверки позиции: {e}")
 
             # === Проверяем сигналы только на закрытии новой H1 свечи ===
             # Обрабатываем свечу один раз — в первые 5 минут после закрытия
