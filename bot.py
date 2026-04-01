@@ -129,9 +129,12 @@ def run_bot():
             # Сброс дневных счётчиков
             trader.reset_daily(today_str)
 
-            # Обновляем данные каждые 10 минут или при первом запуске
-            if data is None or last_data_fetch is None or \
-               (now - last_data_fetch).total_seconds() > 600:
+            # Загружаем данные: при старте + перед каждой новой H1 свечой
+            # (экономим API-квоту: ~50 запросов/день вместо ~150)
+            candle_boundary = (now.minute < 5 and current_hour != last_processed_hour)
+            need_data = (data is None or last_data_fetch is None or candle_boundary)
+
+            if need_data:
                 try:
                     print(f"  [{now.strftime('%H:%M:%S')} UTC] Загрузка данных...")
                     data = fetch_h1_candles(days_back=30)
